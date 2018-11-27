@@ -163,6 +163,7 @@ int XrdXrootdProtocol::Configure(char *parms, XrdProtocol_Config *pi)
    Window       = pi->WSize;
    WANPort      = pi->WANPort;
    WANWindow    = pi->WANWSize;
+   tlsCtx       = pi->tlsCtx;
 
 // Record globally accessible values
 //
@@ -446,6 +447,10 @@ int XrdXrootdProtocol::Configure(char *parms, XrdProtocol_Config *pi)
           }
       }
 
+// Finally note whether or not we have TLS enabled
+//
+   if (tlsCtx) myRole |= kXR_haveTls;
+
 // Return success
 //
    free(adminp);
@@ -542,6 +547,10 @@ void XrdXrootdProtocol::PidFile()
 int XrdXrootdProtocol::ConfigSecurity(XrdOucEnv &xEnv, const char *cfn)
 {
    XrdSecGetProt_t secGetProt = 0;
+
+// TLS support is independent of security per se. Record context, if any.
+//
+   xEnv.PutPtr("XrdTLSContext*", (void *)tlsCtx);
 
 // Check if we need to loadanything
 //
@@ -1599,16 +1608,15 @@ int XrdXrootdProtocol::xreq(XrdOucStream &Config)
     char *val;
     static struct requireopts {const char *opname; int opval;} reqopts[] =
        {
-        {"all",      TRACE_ALL},
-        {"getfile",  TRACE_EMSG},
-        {"login",    TRACE_EMSG},
-        {"modfs",    TRACE_DEBUG},
-        {"openr",    TRACE_FS},
-        {"openw",    TRACE_LOGIN},
-        {"putfile",  TRACE_LOGIN},
-        {"tpc",      TRACE_MEM}
+        {"all",      kXR_tlsAll},
+        {"gpfile",   kXR_tlsGPFile},
+        {"login",    kXR_tlsLogin},
+        {"modfs",    kXR_tlsModFS},
+        {"openr",    kXR_tlsOpenR},
+        {"openw",    kXR_tlsOpenW},
+        {"tpc",      kXR_tlsTPC}
        };
-    int i, trval = 0, numopts = sizeof(reqopts)/sizeof(struct requireopts);
+    int i, numopts = sizeof(reqopts)/sizeof(struct requireopts);
     bool neg;
 
     if (!(val = Config.GetWord()))
@@ -1621,12 +1629,12 @@ int XrdXrootdProtocol::xreq(XrdOucStream &Config)
        {eDest.Emsg("config", "require option not specified"); return 1;}
 
     while (val)
-         {if (!strcmp(val, "off")) trval = 0;
+         {if (!strcmp(val, "off")) myRole &= ~kXR_tlsAll;
              else {if ((neg = (val[0] == '-' && val[1]))) val++;
                    for (i = 0; i < numopts; i++)
                        {if (!strcmp(val, reqopts[i].opname))
-                           {if (neg) trval &= ~reqopts[i].opval;
-                               else  trval |=  reqopts[i].opval;
+                           {if (neg) myRole &= ~reqopts[i].opval;
+                               else  myRole |=  reqopts[i].opval;
                             break;
                            }
                        }
@@ -1638,7 +1646,12 @@ int XrdXrootdProtocol::xreq(XrdOucStream &Config)
           val = Config.GetWord();
          }
 
-//  XrdXrootdTrace->What = trval;
+// If there are any TLS requirement then TLS must have been configured.
+//
+    if (myRole & kXR_tlsAll && !tlsCtx)
+       {eDest.Emsg("config", "Unable to honor requirement; TLS not configured!");
+        return 1;
+       }
     return 0;
 }
 
